@@ -38,7 +38,7 @@ end
     D::Float64 # debt
     B::Float64 # bank money
     bank::Union{Bank,Nothing} # bank assigned to
-    wants_loan::Bool
+    wants_loan::Union{Bool,String}
     amount::Float64 # amount of loan wanted
     mem::Tuple{Tuple{Int,Int},Float64} # memory of last island mined
     target::Tuple{Int,Int} # target island for imitator
@@ -126,71 +126,82 @@ function firmbank_step!(firm::Firm, model)
         ############# Behaviour for Miners ####################################################
         ############# 1. Pay off loans, then save #############
     elseif firm.state == "mi"
-        Q = firm.Q
-        bank = firm.bank
-        position = firm.pos
-        if firm.D > 0 # if firm has debt, repay
-            firm.D -= Q / (1 + r) # discount to obtain the principal
-            bank.loans -= Q # outstanding loan turned into capital
-            bank.capital += Q + ((Q * r) * (1 - ξ))
-            bank.equity += (Q * r * (1 - ξ))
-            bank.profits += (Q * r * ξ)
-        else # else consume and save
-            firm.E += Q * (1 - c)
-            E = firm.E
-            bank.capital += γ₁ * E
-            bank.equity += γ₁ * E
-            firm.E = (1 - γ₁) * E
-
-        end
-
-        ############# 2. Explorer transition, if funds, else wants_loan #############
-        if rand(model.rng) ≤ ϵ # with prob ϵ
-            m_pos = length(agents_in_position(firm, model))
-            C = (c * Q * (m_pos)^(α - 1)) / model.π_isl #expected cost of exploration
-            if (firm.E + firm.B) ≥ C
-                firm.state = "ex"
-                firm.mem = (firm.pos, Q)
-                firm.Q = 0.0
-            else
-                # TODO turn bro into an explorer if she gets loan
-                firm.wants_loan = true
-                firm.amount = C - firm.E
-            end
-            ############# 2. Receive signals and become immitator #############
-        else
-            mi_agents = filter(agent -> agent.state == "mi", collect(allagents(model))) # List of all miners
-            other_islands = filter(agent -> agent.pos != position, mi_agents) # List of miners on other islands
-            signals_received = Dict((middle, middle) => model.productivity[position...]) #
-            m = length(mi_agents) #Total miners
-            for miner in other_islands
-                # All miners on island where signal from
-                firms = collect(agents_in_position(miner.pos, model))
-                mⱼ = count(firm -> firm.state == "mi", firms)
-                distance = manhattan_distance(firm, miner, model)
-                wⱼ = (mⱼ / m) * exp(-ρ * distance)
-                received = rand(model.rng, Binomial(1, wⱼ)) #Chance that signal is received
-                if received == 1 # if the signal was received
-                    signals_received[miner.pos...] = model.productivity[miner.pos...]
+            Q = firm.Q
+            bank = firm.bank
+            position = firm.pos
+            if firm.wants_loan == "granted"
+                firm.wants_loan == false
+                m_pos = length(agents_in_position(firm, model))
+                C = (c * Q * (m_pos)^(α - 1)) / model.π_isl #expected cost of exploration
+                if (firm.E + firm.B) ≥ C
+                    firm.state = "ex"
+                    firm.mem = (firm.pos, Q.firm)
+                    firm.Q = 0.0
+                else
+                    error("A firm was granted a loan but cannot afford exploring, this should not be possible")
                 end
+            elseif firm.D > 0 # if firm has debt, repay
+                firm.D -= Q / (1 + r) # discount to obtain the principal
+                bank.loans -= Q # outstanding loan turned into capital
+                bank.capital += Q + ((Q * r) * (1 - ξ))
+                bank.equity += (Q * r * (1 - ξ))
+                bank.profits += (Q * r * ξ)
+            else # else consume and save
+                firm.E += Q * (1 - c)
+                E = firm.E
+                bank.capital += γ₁ * E
+                bank.equity += γ₁ * E
+                firm.E = (1 - γ₁) * E
             end
-            if !isempty(signals_received)
-                new_coef, new_pos = findmax(signals_received) # Select the best signal
-                old_coef = model.productivity[position...]
-                if new_coef > old_coef # If its better than known
-                    m_pos = length(agents_in_position(firm, model))
-                    distance = manhattan_distance(firm.pos, new_pos, model)
-                    C = (c * firm.Q * (m_pos)^(α - 1)) * distance
-                    if (firm.E + firm.B) ≥ C
-                        firm.state = "im" # Turn into immitator
-                        firm.mem = (firm.pos, firm.Q)
-                        firm.Q = 0.0 # No output
-                        firm.target = new_pos #Target island
-                        plan_route!(firm, new_pos, pathfinder)
-                    else
-                        # TODO turn bro into an imitator if she gets loan
-                        firm.wants_loan = true
-                        firm.amount = C - firm.E
+
+            ############# 2. Explorer transition, if funds, else wants_loan #############
+            if rand(model.rng) ≤ ϵ # with prob ϵ
+                m_pos = length(agents_in_position(firm, model))
+                C = (c * Q * (m_pos)^(α - 1)) / model.π_isl #expected cost of exploration
+                if (firm.E + firm.B) ≥ C
+                    firm.state = "ex"
+                    firm.mem = (firm.pos, Q)
+                    firm.Q = 0.0
+                else
+                    # TODO turn into an explorer if she gets loan
+                    firm.wants_loan = true
+                    firm.amount = C - firm.E
+                end
+                ############# 2. Receive signals and become immitator #############
+            else
+                mi_agents = filter(agent -> agent.state == "mi", collect(allagents(model))) # List of all miners
+                other_islands = filter(agent -> agent.pos != position, mi_agents) # List of miners on other islands
+                signals_received = Dict((middle, middle) => model.productivity[position...]) #
+                m = length(mi_agents) #Total miners
+                for miner in other_islands
+                    # All miners on island where signal from
+                    firms = collect(agents_in_position(miner.pos, model))
+                    mⱼ = count(firm -> firm.state == "mi", firms)
+                    distance = manhattan_distance(firm, miner, model)
+                    wⱼ = (mⱼ / m) * exp(-ρ * distance)
+                    received = rand(model.rng, Binomial(1, wⱼ)) #Chance that signal is received
+                    if received == 1 # if the signal was received
+                        signals_received[miner.pos...] = model.productivity[miner.pos...]
+                    end
+                end
+                if !isempty(signals_received)
+                    new_coef, new_pos = findmax(signals_received) # Select the best signal
+                    old_coef = model.productivity[position...]
+                    if new_coef > old_coef # If its better than known
+                        m_pos = length(agents_in_position(firm, model))
+                        distance = manhattan_distance(firm.pos, new_pos, model)
+                        C = (c * firm.Q * (m_pos)^(α - 1)) * distance
+                        if (firm.E + firm.B) ≥ C
+                            firm.state = "im" # Turn into immitator
+                            firm.mem = (firm.pos, firm.Q)
+                            firm.Q = 0.0 # No output
+                            firm.target = new_pos #Target island
+                            plan_route!(firm, new_pos, pathfinder)
+                        else
+                            # TODO turn bro into an imitator if she gets loan
+                            firm.wants_loan = true
+                            firm.amount = C - firm.E
+                        end
                     end
                 end
             end
@@ -245,7 +256,7 @@ function firmbank_step!(bank::Bank, model)
         firm.D += amount
         firm.B += amount
         firm.amount = 0.0
-        firm.wants_loan = false
+        firm.wants_loan = "granted"
 
         bank.loans += amount
         bank.liabilities += amount
