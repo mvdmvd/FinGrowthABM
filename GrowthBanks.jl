@@ -3,15 +3,10 @@ using Agents, Agents.Pathfinding, Random, Distributions
 
 export Bank, Firm, initialize_econ, firmbank_step!
 
-
-
-
-#= TODO
-1. make it so firms explore or immirate the turn after they receive the funds (maybe with another state that gets toggled: received_loan= im, ex, none and is then passed to the correct state)
-2. do the capitalisation of banks, creation, default, recreation
-3. do dividend payouts
-=#
-
+# TODO
+# Savings have to be deposits!!!! or this thing doesnt work!!!!!!
+# add a new attribute deposits and whenever firm.E increases then bank.deposits increases!
+# liabilities are first settled with deposits and then with capital
 ## In this file I write the agent classes, their step functions, and the model init function ##
 
 ##############################################################
@@ -27,7 +22,6 @@ export Bank, Firm, initialize_econ, firmbank_step!
     equity::Float64
 
     firms::Vector{AbstractAgent}
-    bankrupt::Bool
     profits::Float64
 end
 
@@ -38,7 +32,7 @@ end
     D::Float64 # debt
     B::Float64 # bank money
     bank::Union{Bank,Nothing} # bank assigned to
-    wants_loan::Union{Bool,String}
+    wants_loan::Vector{Any}
     amount::Float64 # amount of loan wanted
     mem::Tuple{Tuple{Int,Int},Float64} # memory of last island mined
     target::Tuple{Int,Int} # target island for imitator
@@ -62,19 +56,20 @@ function firmbank_step!(firm::Firm, model)
     middle = model.middle # agents start in the middle of the space
     pathfinder = model.pathfinder  # pathfinder algo finds shortest path to target for imitator
 
-    old_pos, old_Q = firm.mem
 
+    _, old_Q = firm.mem
     ############# Behaviour for Explorers ##################################
     ############# 1. Pay exploration cost #############   
     if firm.state == "ex"
         # First cost pay by bank, then by savings           
-        m_old = length(agents_in_position(old_pos, model)) # nr of agents on old position
-        cost = c * model.productivity[old_pos...] * (m_old)^(α - 1) # cost of exploration
-        if firm.B > 0
-            firm.B -= cost
+        cost = c * old_Q # cost of exploration
+        if firm.B > 0.0
+            bybank = min(firm.B, cost)
+            firm.B -= bybank
+            firm.E -= (cost - bybank)
             bank = firm.bank
-            bank.capital -= cost
-            bank.liabilities -= cost
+            bank.capital -= bybank
+            bank.liabilities -= bybank
         else
             firm.E -= cost
         end
@@ -103,19 +98,20 @@ function firmbank_step!(firm::Firm, model)
         ############# 1. Immitation cost #############
     elseif firm.state == "im"
         # First by bank, then by savings
-        move_along_route!(firm, model, pathfinder)
-        m_old = length(agents_in_position(old_pos, model))
-        cost = c * old_Q * (m_old)^(α - 1)
-        if firm.B > 0
-            firm.B -= cost
+        cost = c * old_Q # cost of immitation
+        if firm.B > 0.0
+            bybank = min(firm.B, cost)
+            firm.B -= bybank
+            firm.E -= (cost - bybank)
             bank = firm.bank
-            bank.capital -= cost
-            bank.liabilities -= cost
+            bank.capital -= bybank
+            bank.liabilities -= bybank
         else
             firm.E -= cost
         end
 
         ############# 3. Check if destination reached, become miner if so #############
+        move_along_route!(firm, model, pathfinder)
         position = firm.pos
         if position == firm.target
             firm.state = "mi"
@@ -126,48 +122,58 @@ function firmbank_step!(firm::Firm, model)
         ############# Behaviour for Miners ####################################################
         ############# 1. Pay off loans, then save #############
     elseif firm.state == "mi"
-            Q = firm.Q
-            bank = firm.bank
-            position = firm.pos
-            if firm.wants_loan == "granted"
-                firm.wants_loan == false
-                m_pos = length(agents_in_position(firm, model))
-                C = (c * Q * (m_pos)^(α - 1)) / model.π_isl #expected cost of exploration
-                if (firm.E + firm.B) ≥ C
-                    firm.state = "ex"
-                    firm.mem = (firm.pos, Q.firm)
-                    firm.Q = 0.0
-                else
-                    error("A firm was granted a loan but cannot afford exploring, this should not be possible")
-                end
-            elseif firm.D > 0 # if firm has debt, repay
-                firm.D -= Q / (1 + r) # discount to obtain the principal
-                bank.loans -= Q # outstanding loan turned into capital
-                bank.capital += Q + ((Q * r) * (1 - ξ))
-                bank.equity += (Q * r * (1 - ξ))
-                bank.profits += (Q * r * ξ)
-            else # else consume and save
-                firm.E += Q * (1 - c)
-                E = firm.E
-                bank.capital += γ₁ * E
-                bank.equity += γ₁ * E
-                firm.E = (1 - γ₁) * E
+        Q = firm.Q
+        bank = firm.bank
+        position = firm.pos
+        if firm.wants_loan[1] == "granted"
+            firm.state = firm.wants_loan[2]
+            firm.mem = (firm.pos, Q)
+            firm.Q = 0.0
+            firm.wants_loan[1] = false
+        else
+            cost = c * Q # consume
+            if firm.B > 0.0
+                bybank = min(firm.B, cost)
+                firm.B -= bybank
+                firm.E -= (cost - bybank)
+                bank = firm.bank
+                bank.capital -= bybank
+                bank.liabilities -= bybank
+            else
+                firm.E -= cost
             end
-
+            # pay off debt then save
+            S = Q * (1 - c)
+            if firm.D > 0 # if firm has debt, repay
+                repayment = min(firm.D, S / (1 + r))
+                firm.D -= repayment # discount to obtain the principal
+                bank.loans -= repayment # outstanding loan turned into capital
+                bank.capital += repayment
+                bank.equity += (repayment * r * (1 - ξ)) # profits become equity
+                bank.capital += (repayment * r * (1 - ξ))
+                bank.profits += (repayment * r * ξ)
+                save = max(S - (repayment * (1 + r)), 0)
+                bank.capital += γ₁ * save
+                bank.equity += γ₁ * save
+                firm.E = (1 - γ₁) * save # save remainder
+            else # save and deposit
+                bank.capital += γ₁ * S
+                bank.equity += γ₁ * S
+                firm.E = (1 - γ₁) * S
+            end
             ############# 2. Explorer transition, if funds, else wants_loan #############
-            if rand(model.rng) ≤ ϵ # with prob ϵ
+            if rand(model.rng) ≤ ϵ && firm.D ≤ 0.1 # with prob ϵ
                 m_pos = length(agents_in_position(firm, model))
-                C = (c * Q * (m_pos)^(α - 1)) / model.π_isl #expected cost of exploration
+                C = Q / model.π_isl #expected cost of exploration
                 if (firm.E + firm.B) ≥ C
                     firm.state = "ex"
                     firm.mem = (firm.pos, Q)
                     firm.Q = 0.0
                 else
-                    # TODO turn into an explorer if she gets loan
-                    firm.wants_loan = true
-                    firm.amount = C - firm.E
+                    firm.wants_loan = [true, "ex"]
+                    firm.amount = max(C - (firm.E + firm.B), 0)
                 end
-                ############# 2. Receive signals and become immitator #############
+                ############# 3. Receive signals and become immitator #############
             else
                 mi_agents = filter(agent -> agent.state == "mi", collect(allagents(model))) # List of all miners
                 other_islands = filter(agent -> agent.pos != position, mi_agents) # List of miners on other islands
@@ -187,10 +193,10 @@ function firmbank_step!(firm::Firm, model)
                 if !isempty(signals_received)
                     new_coef, new_pos = findmax(signals_received) # Select the best signal
                     old_coef = model.productivity[position...]
-                    if new_coef > old_coef # If its better than known
+                    if new_coef > old_coef && firm.D ≤ 0.1 # If its better than known and no debt
                         m_pos = length(agents_in_position(firm, model))
                         distance = manhattan_distance(firm.pos, new_pos, model)
-                        C = (c * firm.Q * (m_pos)^(α - 1)) * distance
+                        C = c * Q * distance
                         if (firm.E + firm.B) ≥ C
                             firm.state = "im" # Turn into immitator
                             firm.mem = (firm.pos, firm.Q)
@@ -198,9 +204,8 @@ function firmbank_step!(firm::Firm, model)
                             firm.target = new_pos #Target island
                             plan_route!(firm, new_pos, pathfinder)
                         else
-                            # TODO turn bro into an imitator if she gets loan
-                            firm.wants_loan = true
-                            firm.amount = C - firm.E
+                            firm.wants_loan = [true, "im"]
+                            firm.amount = max(C - (firm.E + firm.B), 0)
                         end
                     end
                 end
@@ -209,15 +214,17 @@ function firmbank_step!(firm::Firm, model)
     end
 end
 
-function firmbank_step!(bank::Bank, model)
+function firmbank_step!(bank::AbstractAgent, model)
     Χ = model.Χ
     α = model.α
+    ζ = model.ζ
+    γ₂ = model.γ₂
+
 
     div = bank.profits / length(bank.firms)
-
     ############# 1. Process defaults and pay dividends #############
     for firm in bank.firms
-        if firm.E + firm.B < 0
+        if firm.E + firm.B ≤ 0.0 #firm default
             bank.loans -= firm.D
             bank.equity -= firm.D
             old_pos, _ = firm.mem
@@ -228,36 +235,49 @@ function firmbank_step!(bank::Bank, model)
             firm.E = 0.0
             firm.B = 0.0
             firm.D = 0.0
-            firm.E += div
         end
+        firm.E += div
     end
     bank.profits = 0.0
+
     ############# 2. Process bankrupcy #############
-    #TODO bank defaults
-    if bank.equity < 0
-        bank.bankrupt = true
+    if bank.equity ≤ 0.0
+        for firm in bank.firms
+            firm.E += bank.capital \ length(bank.firms)
+        end
+        recap = 0.0
+        for firm in bank.firms
+            share = firm.E * γ₂
+            firm.E -= share
+            recap += share
+        end
+        bank.capital = recap * ζ
+
+        bank.equity = bank.capital + bank.loans - bank.liabilities
+
     end
 
     ############# 3. Select firms and provide loans #############
-    firms_looking = filter(firm -> firm.wants_loan, bank.firms)
+    firms_looking = filter(firm -> firm.wants_loan[1] == true, bank.firms)
     sorted_firms_looking = sort(firms_looking, by=firm -> firm.amount)
-    c_supp = (bank.equity / Χ) - bank.loans
+    c_supp = max((bank.equity / Χ) - bank.loans, 0)
+
     total_req = 0.0
     firms_supplied = []
+
     for firm in sorted_firms_looking
-        if total_req + firm.amount > c_supp
-            break
+        if total_req + firm.amount ≤ c_supp
+            total_req += firm.amount
+            push!(firms_supplied, firm)
         end
-        total_req += firm.amount
-        push!(firms_supplied, firm)
     end
+
     for firm in firms_supplied
         amount = firm.amount
         firm.D += amount
         firm.B += amount
         firm.amount = 0.0
-        firm.wants_loan = "granted"
-
+        firm.wants_loan[1] = "granted"
         bank.loans += amount
         bank.liabilities += amount
     end
@@ -269,7 +289,7 @@ end
 function initialize_econ(;
     n_firms=100,
     n_banks=5,
-    dim=5001, # Always make uneven!
+    dim=1001, # Always make uneven!
     π_isl=0.1,
     α=1.5,
     ϵ=0.1,
@@ -280,6 +300,7 @@ function initialize_econ(;
     Χ=0.1,
     r=0.1,
     γ₁=0.01,
+    γ₂=0.5,
     ζ=0.1,
     ξ=0.15,
     seed=42)
@@ -305,6 +326,7 @@ function initialize_econ(;
         Χ=Χ,
         r=r,
         γ₁=γ₁,
+        γ₂=γ₂,
         ζ=ζ,
         ξ=ξ,
         middle=middle,
@@ -320,7 +342,6 @@ function initialize_econ(;
 
     ############# 3. Populate with firms then banks #############
     firms = []
-
     #Adding agents
     for _ in 1:n_firms
         state = "mi"
@@ -329,7 +350,7 @@ function initialize_econ(;
         D = 0.0
         B = 0.0
         bank = nothing
-        wants_loan = false
+        wants_loan = [false, "placeholder"]
         amount = 0.0
         pos = (middle, middle)
         mem = (pos, 0.0)
@@ -344,7 +365,6 @@ function initialize_econ(;
     end
 
     #Adding banks
-    #TODO bank capitalisation
     for i in 1:n_banks
         add_agent!(Bank, model;
             state="bank",
@@ -354,7 +374,6 @@ function initialize_econ(;
             liabilities=0.0,
             equity=0.0,
             firms=firm_groups[i],
-            bankrupt=false,
             profits=0.0)
     end
 
@@ -366,6 +385,7 @@ function initialize_econ(;
         end
     end
 
+
     ############# 4. Generate islands
     for p in positions(model)
         model.island_dummy[p...] = rand(model.rng) ≤ π_isl
@@ -376,6 +396,18 @@ function initialize_econ(;
     for firm in allagents(model)
         if isa(firm, Firm)
             firm.Q = (n_firms)^(α - 1)
+        end
+    end
+
+    for bank in allagents(model) #Assign banks to firms
+        if isa(bank, Bank)
+            cap = 0.0
+            for firm in bank.firms
+                cap_i = firm.Q * γ₂
+                cap += cap_i
+            end
+            bank.equity = cap
+            bank.capital = cap
         end
     end
 
