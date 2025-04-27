@@ -3,10 +3,6 @@ using Agents, Agents.Pathfinding, Random, Distributions
 
 export Bank, Firm, initialize_econ, firmbank_step!
 
-# TODO
-# Savings have to be deposits!!!! or this thing doesnt work!!!!!!
-# add a new attribute deposits and whenever firm.E increases then bank.deposits increases!
-# liabilities are first settled with deposits and then with capital
 ## In this file I write the agent classes, their step functions, and the model init function ##
 
 ##############################################################
@@ -65,6 +61,9 @@ function firmbank_step!(firm::Firm, model)
         liquidity = min(cost, bank.liquidity)
         bank.liquidity -= liquidity
         bank.equity -= cost - liquidity
+        firm.S = max(firm.S, 0.0)
+        bank.liquidity = max(bank.liquidity, 0.0)
+        bank.equity = max(bank.equity, 0.0)
         ############# 2. Movement #############
         randomwalk!(firm, model, 1) #Take one random-walk step
         pos = firm.pos
@@ -91,6 +90,9 @@ function firmbank_step!(firm::Firm, model)
         liquidity = min(cost, bank.liquidity)
         bank.liquidity -= liquidity
         bank.equity -= cost - liquidity
+        firm.S = max(firm.S, 0.0)
+        bank.liquidity = max(bank.liquidity, 0.0)
+        bank.equity = max(bank.equity, 0.0)
         ############# 2. Movement #############
         move_along_route!(firm, model, pathfinder) # step along the shortest path to destination
         pos = firm.pos
@@ -111,32 +113,26 @@ function firmbank_step!(firm::Firm, model)
         if firm.wants_loan[1] == "granted" # transform if loan was requested previous period
             firm.wants_loan[1] = false
             firm.state = firm.wants_loan[2]
-            firm.mem = (pos, Q) # tet memory
+            firm.mem = (pos, Q) # set memory
             firm.Q = 0.0 # no production during innovation
         else
-            cost = c * old_Q # cost of exploration
-            firm.S -= cost
-            bank = firm.bank
-            liquidity = min(cost, bank.liquidity)
-            bank.liquidity -= liquidity
-            bank.equity -= cost - liquidity
-
-            Π = Q - cost # net profits
-
-            repay = min(firm.D, Π \ (1 + r)) # repay with interest
+            firm.D = max(firm.D, 0.0)
+            repay = min(firm.D, Q / (1 + r)) # repay with interest
             firm.D -= repay
             bank.L -= repay
             bank.dividend += repay * r * ξ # share of profits becomes dividend
             bank.liquidity += repay * (1 + r * (1 - ξ)) # the rest is for the bank
+            firm.D = max(firm.D, 0.0)
+            bank.L = max(bank.L, 0.0)
 
-            S = Π - repay * (1 + r) # invest and save
+            S = (1 - c) * (Q - repay * (1 + r)) # invest and save
             bank.equity += γ₁ * S
             firm.share += γ₁ * S # share invested in bank equity
             bank.liquidity += (1 - γ₁) * S
             firm.S += (1 - γ₁) * S # rest is deposited
 
             ############# 2. Explorer transition #############
-            if rand(model.rng) ≤ ϵ && firm.D ≤ 1e-6 # with prob ϵ and if no debt, transform. (small positive const for numerical stability)
+            if rand(model.rng) ≤ ϵ && firm.D ≤ 1e-5 # with prob ϵ and if no debt, transform. (small positive const for numerical stability)
                 C = Q / π_isl # expected cost of exploration
                 if firm.S ≥ C # if firm has the funds, become explorer
                     firm.state = "ex"
@@ -180,17 +176,38 @@ function firmbank_step!(firm::Firm, model)
     end
 end
 
-function firmbank_step!(bank::AbstractAgent, model)
+function firmbank_step!(bank::Bank, model)
     Χ = model.Χ
     α = model.α
     ζ = model.ζ
     γ₂ = model.γ₂
+    c = model.c
 
-    ############# 1. Process defaults and pay dividends #############
+    ############# 1. Select firms and provide loans #############
+    applicants = filter(firm -> firm.wants_loan[1] == true, bank.firms)
+    sorted_applicants = sort(applicants, by=firm -> firm.wants_loan[3])
+    credit_supply = max((bank.equity / Χ) - bank.L, 0)
+    total_requested = 0.0
+    for firm in sorted_applicants
+        amount = firm.wants_loan[3]
+        if total_requested + amount ≥ credit_supply
+        end
+        if total_requested + amount ≤ credit_supply
+            total_requested += amount
+            firm.D += amount
+            bank.L += amount
+            firm.S += amount
+            firm.wants_loan[1] = "granted"
+            firm.wants_loan[3] = 0.0
+
+        end
+    end
+
+    ############# 2. Process defaults and pay dividends #############
     defaulted_shares = 0.0
     for firm in bank.firms
         if firm.S ≤ 0.0 #if firm default
-            bank.equity -= firm.D
+            bank.equity -= max(firm.D, 0.0)
             defaulted_shares += firm.share
             firm.share = 0.0
             firm.S = 0.0
@@ -209,8 +226,8 @@ function firmbank_step!(bank::AbstractAgent, model)
     end
     bank.dividend = 0.0
 
-    ############# 2. Process bankrupcy #############
-    if bank.equity ≤ 0.0
+    ############# 3. Process bankrupcy #############
+    if bank.equity ≤ 1e-5
         bank.equity = 0.0
         tot_deposits = 0.0
         tot_shares = 0.0
@@ -238,10 +255,11 @@ function firmbank_step!(bank::AbstractAgent, model)
             bank.liquidity += firm.S
             firm.D = 0.0
         end
+
         # recapitalisation
         new_fund = 0.0
         for firm in bank.firms
-            new_share = firm.S * γ₂
+            new_share = firm.Q * (1 - c) * γ₂
             firm.S -= new_share
             firm.share = new_share
             new_fund += new_share
@@ -249,22 +267,9 @@ function firmbank_step!(bank::AbstractAgent, model)
         bank.equity = new_fund * ζ
     end
 
-    ############# 3. Select firms and provide loans #############
-    applicants = filter(firm -> firm.wants_loan[1] == true, bank.firms)
-    sorted_applicants = sort(applicants, by=firm -> firm.wants_loan[3])
-    credit_supply = max((bank.equity / Χ) - bank.L, 0)
-    total_requested = 0.0
 
-    for firm in sorted_applicants
-        amount = firm.wants_loan[3]
-        if total_requested + amount ≤ credit_supply
-            total_requested += amount
-            firm.D += amount
-            firm.S += amount
-            firm.wants_loan[1] = "granted"
-            bank.L += amount
-        end
-    end
+
+
 end
 
 ####################################################################################################
@@ -384,7 +389,7 @@ function initialize_econ(;
     for bank in allagents(model)
         if isa(bank, Bank)
             for firm in bank.firms
-                share = firm.Q * γ₂
+                share = firm.Q * (1 - c) * γ₂
                 bank.equity += share
                 firm.share += share
             end
