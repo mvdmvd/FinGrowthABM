@@ -1,6 +1,3 @@
-# FinGrowthABM
-
-
 ## Overview
 
 This repository contains Julia implementations of an agent-based model in economic growth theory reproduced from scratch as an exercise in learning Julia and agent-based modeling (ABM).
