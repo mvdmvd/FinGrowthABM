@@ -51,9 +51,11 @@ I extend the basic model by connecting the firms through a Holme-Kim network top
 
 ## References
 
-- Dosi, G., Fagiolo, G., & Roventini, A. (2003). *Innovation, finance, and economic growth: An agent-based approach*
-- Fagiolo, G., Guerini, M., Lamperti, F., Moneta, A., & Roventini, A. (2019). *Validation of agent-based models in economics and finance*
-
+-  Fagiolo, G., Dosi, G. (2003). *Exploitation, exploration and innovation in a
+model of endogenous growth with locally
+interacting agents*
+- Fagiolo, G., Giachini, D., & Roventini, A. (2019). *Innovation, ﬁnance, and economic growth: an agent-based
+approach*
 
 ## License
 
