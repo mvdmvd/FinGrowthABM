@@ -43,23 +43,6 @@ I extend the basic model by connecting the firms through a Holme-Kim network top
 
 ## Usage
 
-### Running the Basic Model
-
-```julia
-using Pkg
-Pkg.activate(".")
-
-include("GrowthBasic.jl")
-using .GrowthBasic
-
-# Initialize and run simulation
-model = initialize_econ(n_firms=100, dims=(50,50))
-run!(model, agent_step!, model_step!, 1000)
-```
-
-### Notebooks
-
-Open the Jupyter notebooks for interactive exploration:
 - `testing.ipynb` - Basic model experiments
 - `EmpiricalTestsBasic.ipynb` - Statistical analysis and validation
 - `testing_banks.ipynb` - Banking model (experimental)
