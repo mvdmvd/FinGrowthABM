@@ -1,6 +1,5 @@
 # FinGrowthABM
 
-Agent-Based Models of Economic Growth, Finance, and Innovation
 
 ## Overview
 
